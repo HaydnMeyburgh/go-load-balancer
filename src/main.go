@@ -10,8 +10,8 @@ import (
 
 type Server interface {
 	Address() string
-	isAlive() bool
-	server(rw http.ResponseWriter, r *http.Request)
+	IsAlive() bool
+	Serve(rw http.ResponseWriter, req *http.Request)
 }
 
 type simpleServer struct {
@@ -37,9 +37,9 @@ type LoadBalancer struct {
 
 func NewLoadBalancer(port string, servers []Server) *LoadBalancer {
 	return &LoadBalancer{
-		port: port,
+		port:            port,
 		roundRobinCount: 0,
-		servers: servers,
+		servers:         servers,
 	}
 }
 
@@ -50,6 +50,51 @@ func handleErr(err error) {
 	}
 }
 
-func main() {
-
+func (s *simpleServer) Address() string {
+	return s.addr
 }
+
+func (s *simpleServer) IsAlive() bool {
+	return true
+}
+
+func (s *simpleServer) Serve(rw http.ResponseWriter, req *http.Request) {
+	s.proxy.ServeHTTP(rw, req)
+}
+
+func (lb *LoadBalancer) getNextAvailableServer() Server {
+	server := lb.servers[lb.roundRobinCount%len(lb.servers)]
+	for !server.IsAlive() {
+		lb.roundRobinCount++
+		server = lb.servers[lb.roundRobinCount%len(lb.servers)]
+	}
+	lb.roundRobinCount++
+	return server
+}
+
+func (lb *LoadBalancer) serveProxy(rw http.ResponseWriter, req *http.Request) {
+	targetServer := lb.getNextAvailableServer()
+	fmt.Printf("forwarding request to address %q\n", targetServer.Address())
+	targetServer.Serve(rw, req)
+}
+
+func main() {
+	servers := []Server{
+		newSimpleServer("https://www.facebook.com"),
+		newSimpleServer("https://www.bing.com"),
+		newSimpleServer("https://www.duckduckgo.com"),
+	}
+
+	lb := NewLoadBalancer("8000", servers)
+	handleRedirect := func(rw http.ResponseWriter, req *http.Request) {
+		lb.serveProxy(rw, req)
+	}
+
+	http.HandleFunc("/", handleRedirect)
+	fmt.Printf("Serving request at localhost: %s\n", lb.port)
+	http.ListenAndServe(":"+lb.port, nil)
+}
+
+
+
+
